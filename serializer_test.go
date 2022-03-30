@@ -28,6 +28,11 @@ func TestMarshal(t *testing.T) {
 		AUInt64:    0xffffffff00000000,
 		AByteSlice: make([]byte, 10),
 	}
+	l, err := StructLen(ts1)
+	log.Printf("len(ts1):%d", l)
+	if err != nil {
+		log.Fatalln(err)
+	}
 	for i := 0; i < len(ts1.AByteSlice); i++ {
 		ts1.AByteSlice[i] = byte(i + 10)
 	}
@@ -39,7 +44,7 @@ func TestMarshal(t *testing.T) {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	log.Printf("b:%v", b)
+	log.Printf("b(len:%d):%v", len(b), b)
 	err = Unmarshal(b, ts2)
 	log.Printf("ts2:%+v", ts2)
 	if err != nil {
