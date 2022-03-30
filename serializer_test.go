@@ -1,4 +1,4 @@
-package transapi
+package structraw
 
 import (
 	"log"

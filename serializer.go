@@ -1,4 +1,4 @@
-package transapi
+package structraw
 
 import (
 	"bytes"
@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	TagErr             = errors.New("tag format error")
-	UnmarshalDataError = errors.New("unmarshal data error")
+	TagErr             = errors.New("struct raw tag format error")
+	UnmarshalDataError = errors.New("struct raw unmarshal data error")
 )
 
 type InvalidTypeError struct {
