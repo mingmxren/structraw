@@ -19,16 +19,8 @@ var (
 
 // Marshal with struct_raw tag
 func Marshal(s interface{}) ([]byte, error) {
-	value := reflect.ValueOf(s)
-	if reflect.ValueOf(s).Kind() == reflect.Ptr {
-		value = reflect.Indirect(reflect.ValueOf(s))
-	}
-	if value.Kind() != reflect.Struct {
-		return nil, InvalidTypeErr
-	}
 	bb := &bytes.Buffer{}
-	err := marshal(value, bb)
-	if err != nil {
+	if err := MarshalToWriter(s, bb); err != nil {
 		return nil, err
 	}
 	return bb.Bytes(), nil
@@ -158,6 +150,11 @@ func marshalField(field reflect.StructField, value reflect.Value, w io.Writer) e
 }
 
 func Unmarshal(data []byte, s interface{}) error {
+	bb := bytes.NewBuffer(data)
+	return UnmarshalFromReader(bb, s)
+}
+
+func UnmarshalFromReader(r io.Reader, s interface{}) error {
 	if reflect.ValueOf(s).Kind() != reflect.Ptr {
 		return InvalidTypeErr
 	}
@@ -165,8 +162,7 @@ func Unmarshal(data []byte, s interface{}) error {
 	if value.Kind() != reflect.Struct {
 		return InvalidTypeErr
 	}
-	bb := bytes.NewBuffer(data)
-	return unmarshal(bb, value)
+	return unmarshal(r, value)
 }
 
 func unmarshal(r io.Reader, value reflect.Value) error {
