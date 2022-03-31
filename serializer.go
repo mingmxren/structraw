@@ -4,30 +4,18 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
+	"unsafe"
 )
 
 var (
-	TagErr             = errors.New("struct raw tag format error")
-	UnmarshalDataError = errors.New("struct raw unmarshal data error")
+	TagFormatErr    = errors.New("TagFormatErr")
+	ReadDataErr     = errors.New("ReadDataErr")
+	InvalidTypeErr  = errors.New("InvalidTypeErr")
+	WriteDataLenErr = errors.New("WriteDataLenErr")
 )
-
-type InvalidTypeError struct {
-	Type reflect.Type
-}
-
-func (e InvalidTypeError) Error() string {
-	if e.Type == nil {
-		return "struct_raw: Marshal/Unmarshal(nil)"
-	}
-
-	if e.Type.Kind() != reflect.Ptr {
-		return "struct_raw: Marshal/Unmarshal(non-pointer " + e.Type.String() + ")"
-	}
-
-	return "struct_raw: Marshal/Unmarshal( " + e.Type.String() + ")"
-}
 
 // Marshal with struct_raw tag
 func Marshal(s interface{}) ([]byte, error) {
@@ -36,9 +24,243 @@ func Marshal(s interface{}) ([]byte, error) {
 		value = reflect.Indirect(reflect.ValueOf(s))
 	}
 	if value.Kind() != reflect.Struct {
-		return nil, &InvalidTypeError{reflect.TypeOf(s)}
+		return nil, InvalidTypeErr
 	}
-	return marshal(value)
+	bb := &bytes.Buffer{}
+	err := marshal(value, bb)
+	if err != nil {
+		return nil, err
+	}
+	return bb.Bytes(), nil
+}
+
+func MarshalToWriter(s interface{}, w io.Writer) error {
+	value := reflect.ValueOf(s)
+	if reflect.ValueOf(s).Kind() == reflect.Ptr {
+		value = reflect.Indirect(reflect.ValueOf(s))
+	}
+	if value.Kind() != reflect.Struct {
+		return InvalidTypeErr
+	}
+	return marshal(value, w)
+}
+
+func marshal(value reflect.Value, w io.Writer) error {
+	for i := 0; i < value.Type().NumField(); i++ {
+		field := value.Type().Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+
+		if err := marshalField(field, value.FieldByIndex(field.Index), w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type structRawTag struct {
+	Endian binary.ByteOrder
+}
+
+func (t *structRawTag) parseStructRawTag(tag string) error {
+	ls := strings.Split(tag, ",")
+	for _, l := range ls {
+		if l == "be" {
+			if t.Endian != nil {
+				return TagFormatErr
+			}
+			t.Endian = binary.BigEndian
+		} else if l == "le" {
+			if t.Endian != nil {
+				return TagFormatErr
+			}
+			t.Endian = binary.LittleEndian
+		}
+	}
+
+	return nil
+}
+
+func putUint(ui uint64, endian binary.ByteOrder, bitSize int, w io.Writer) error {
+	if bitSize > 1 && endian == nil {
+		return TagFormatErr
+	}
+	b := [8]byte{}
+	switch bitSize {
+	case 1:
+		b[0] = byte(ui)
+	case 2:
+		endian.PutUint16(b[:2], uint16(ui))
+	case 4:
+		endian.PutUint32(b[:4], uint32(ui))
+	case 8:
+		endian.PutUint64(b[:8], ui)
+	default:
+		panic("invalid bitSize")
+	}
+	n, err := w.Write(b[:bitSize])
+	if err != nil {
+		return err
+	}
+	if n != bitSize {
+		return WriteDataLenErr
+	}
+	return nil
+}
+
+func marshalField(field reflect.StructField, value reflect.Value, w io.Writer) error {
+	stag := field.Tag.Get("struct_raw")
+	var tag structRawTag
+	err := tag.parseStructRawTag(stag)
+	if err != nil {
+		return err
+	}
+	switch field.Type.Kind() {
+	case reflect.Uint8:
+		if err := putUint(value.Uint(), nil, 1, w); err != nil {
+			return err
+		}
+	case reflect.Uint16:
+		if err := putUint(value.Uint(), tag.Endian, 2, w); err != nil {
+			return err
+		}
+	case reflect.Uint32:
+		if err := putUint(value.Uint(), tag.Endian, 4, w); err != nil {
+			return err
+		}
+	case reflect.Uint64:
+		if err := putUint(value.Uint(), tag.Endian, 8, w); err != nil {
+			return err
+		}
+	case reflect.Array, reflect.Slice:
+		if field.Type.Elem().Kind() != reflect.Uint8 {
+			return InvalidTypeErr
+		}
+		var n int
+		var err error
+		if field.Type.Kind() == reflect.Array {
+			n, err = w.Write(valueByteArrayToByteSlice(value))
+		} else {
+			n, err = w.Write(value.Bytes())
+		}
+		if err != nil {
+			return err
+		}
+		if n != value.Len() {
+			return WriteDataLenErr
+		}
+	default:
+		return InvalidTypeErr
+	}
+
+	return nil
+}
+
+func Unmarshal(data []byte, s interface{}) error {
+	if reflect.ValueOf(s).Kind() != reflect.Ptr {
+		return InvalidTypeErr
+	}
+	value := reflect.Indirect(reflect.ValueOf(s))
+	if value.Kind() != reflect.Struct {
+		return InvalidTypeErr
+	}
+	bb := bytes.NewBuffer(data)
+	return unmarshal(bb, value)
+}
+
+func unmarshal(r io.Reader, value reflect.Value) error {
+	for i := 0; i < value.Type().NumField(); i++ {
+		field := value.Type().Field(i)
+		if field.PkgPath != "" {
+			continue
+		}
+		err := unmarshalField(field, value.FieldByIndex(field.Index), r)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func unmarshalField(field reflect.StructField, value reflect.Value, r io.Reader) error {
+	stag := field.Tag.Get("struct_raw")
+	var tag structRawTag
+	err := tag.parseStructRawTag(stag)
+	if err != nil {
+		return err
+	}
+	switch field.Type.Kind() {
+	case reflect.Uint8:
+		if u, err := getUint(tag.Endian, 1, r); err != nil {
+			return err
+		} else {
+			value.SetUint(u)
+		}
+	case reflect.Uint16:
+		if u, err := getUint(tag.Endian, 2, r); err != nil {
+			return err
+		} else {
+			value.SetUint(u)
+		}
+	case reflect.Uint32:
+		if u, err := getUint(tag.Endian, 4, r); err != nil {
+			return err
+		} else {
+			value.SetUint(u)
+		}
+	case reflect.Uint64:
+		if u, err := getUint(tag.Endian, 8, r); err != nil {
+			return err
+		} else {
+			value.SetUint(u)
+		}
+	case reflect.Array, reflect.Slice:
+		if field.Type.Elem().Kind() != reflect.Uint8 {
+			return InvalidTypeErr
+		}
+		b := make([]byte, value.Len())
+		if n, err := r.Read(b); err != nil {
+			return err
+		} else if n != value.Len() {
+			return ReadDataErr
+		}
+		if field.Type.Kind() == reflect.Array {
+			copy(valueByteArrayToByteSlice(value), b)
+		} else {
+			value.SetBytes(b)
+		}
+	default:
+		return InvalidTypeErr
+	}
+	return nil
+}
+
+func getUint(endian binary.ByteOrder, bitSize int, r io.Reader) (uint64, error) {
+	if bitSize > 1 && endian == nil {
+		return 0, TagFormatErr
+	}
+	b := [8]byte{}
+	n, err := r.Read(b[:bitSize])
+	if err != nil {
+		return 0, err
+	}
+	if n != bitSize {
+		return 0, ReadDataErr
+	}
+	switch bitSize {
+	case 1:
+		return uint64(b[0]), nil
+	case 2:
+		return uint64(endian.Uint16(b[:2])), nil
+	case 4:
+		return uint64(endian.Uint32(b[:4])), nil
+	case 8:
+		return endian.Uint64(b[:8]), nil
+
+	default:
+		panic("invalid bitSize")
+	}
 }
 
 func StructLen(s interface{}) (int, error) {
@@ -47,7 +269,7 @@ func StructLen(s interface{}) (int, error) {
 		value = reflect.Indirect(reflect.ValueOf(s))
 	}
 	if value.Kind() != reflect.Struct {
-		return 0, &InvalidTypeError{reflect.TypeOf(s)}
+		return 0, InvalidTypeErr
 	}
 	return structLen(value)
 }
@@ -82,216 +304,20 @@ func fieldLen(field reflect.StructField, value reflect.Value) (int, error) {
 	case reflect.Array, reflect.Slice:
 		return value.Len(), nil
 	default:
-		return 0, InvalidTypeError{Type: field.Type}
+		return 0, InvalidTypeErr
 	}
 }
 
-func marshal(value reflect.Value) ([]byte, error) {
-	bb := &bytes.Buffer{}
-	for i := 0; i < value.Type().NumField(); i++ {
-		field := value.Type().Field(i)
-		if field.PkgPath != "" {
-			continue
-		}
-
-		if err := marshalField(field, value.FieldByIndex(field.Index), bb); err != nil {
-			return nil, err
-		}
-	}
-	return bb.Bytes(), nil
+type slice struct {
+	Data unsafe.Pointer
+	Len  int
+	Cap  int
 }
 
-type structRawTag struct {
-	Endian binary.ByteOrder
-}
-
-func parseStructRawTag(tag string) (*structRawTag, error) {
-	t := &structRawTag{}
-	ls := strings.Split(tag, ",")
-	for _, l := range ls {
-		if l == "be" {
-			if t.Endian != nil {
-				return nil, TagErr
-			}
-			t.Endian = binary.BigEndian
-		} else if l == "le" {
-			if t.Endian != nil {
-				return nil, TagErr
-			}
-			t.Endian = binary.LittleEndian
-		}
-	}
-
-	return t, nil
-}
-
-func marshalField(field reflect.StructField, value reflect.Value, bb *bytes.Buffer) error {
-	stag := field.Tag.Get("struct_raw")
-	tag, err := parseStructRawTag(stag)
-	if err != nil {
-		return err
-	}
-	switch field.Type.Kind() {
-	case reflect.Uint8:
-		bb.WriteByte(byte(value.Uint()))
-	case reflect.Uint16:
-		if tag.Endian == nil {
-			return TagErr
-		}
-		b := make([]byte, 2)
-		tag.Endian.PutUint16(b, uint16(value.Uint()))
-		bb.Write(b)
-	case reflect.Uint32:
-		if tag.Endian == nil {
-			return TagErr
-		}
-		b := make([]byte, 4)
-		tag.Endian.PutUint32(b, uint32(value.Uint()))
-		bb.Write(b)
-	case reflect.Uint64:
-		if tag.Endian == nil {
-			return TagErr
-		}
-		b := make([]byte, 8)
-		tag.Endian.PutUint64(b, value.Uint())
-		bb.Write(b)
-	case reflect.Array:
-		if field.Type.Elem().Kind() != reflect.Uint8 {
-			return InvalidTypeError{Type: field.Type}
-		}
-		for i := 0; i < value.Len(); i++ {
-			bb.WriteByte(byte(value.Index(i).Uint()))
-		}
-	case reflect.Slice:
-		if field.Type.Elem().Kind() != reflect.Uint8 {
-			return InvalidTypeError{Type: field.Type}
-		}
-		bb.Write(value.Bytes())
-	default:
-		return InvalidTypeError{Type: field.Type}
-	}
-
-	return nil
-}
-
-func Unmarshal(data []byte, s interface{}) error {
-	if reflect.ValueOf(s).Kind() != reflect.Ptr {
-		return InvalidTypeError{reflect.TypeOf(s)}
-	}
-	value := reflect.Indirect(reflect.ValueOf(s))
-	if value.Kind() != reflect.Struct {
-		return InvalidTypeError{reflect.TypeOf(s)}
-	}
-	return unmarshal(data, value)
-}
-
-func unmarshal(data []byte, value reflect.Value) error {
-	bb := bytes.NewBuffer(data)
-	for i := 0; i < value.Type().NumField(); i++ {
-		field := value.Type().Field(i)
-		if field.PkgPath != "" {
-			continue
-		}
-		err := unmarshalField(field, value.FieldByIndex(field.Index), bb)
-		if err != nil {
-			return err
-		}
-	}
-	if bb.Len() != 0 {
-		return UnmarshalDataError
-	}
-	return nil
-}
-
-func unmarshalField(field reflect.StructField, value reflect.Value, bb *bytes.Buffer) error {
-	stag := field.Tag.Get("struct_raw")
-	tag, err := parseStructRawTag(stag)
-	if err != nil {
-		return err
-	}
-	switch field.Type.Kind() {
-	case reflect.Uint8:
-		b, err := bb.ReadByte()
-		if err != nil {
-			return err
-		}
-		value.SetUint(uint64(b))
-	case reflect.Uint16:
-		if tag.Endian == nil {
-			return TagErr
-		}
-		if u, err := getUint(tag.Endian, 2, bb); err != nil {
-			return err
-		} else {
-			value.SetUint(u)
-		}
-	case reflect.Uint32:
-		if tag.Endian == nil {
-			return TagErr
-		}
-		if u, err := getUint(tag.Endian, 4, bb); err != nil {
-			return err
-		} else {
-			value.SetUint(u)
-		}
-	case reflect.Uint64:
-		if tag.Endian == nil {
-			return TagErr
-		}
-		if u, err := getUint(tag.Endian, 8, bb); err != nil {
-			return err
-		} else {
-			value.SetUint(u)
-		}
-	case reflect.Array:
-		if field.Type.Elem().Kind() != reflect.Uint8 {
-			return InvalidTypeError{Type: field.Type}
-		}
-		b := make([]byte, value.Len())
-		if n, err := bb.Read(b); err != nil {
-			return err
-		} else if n != value.Len() {
-			return UnmarshalDataError
-		}
-		for i := 0; i < value.Len(); i++ {
-			value.Index(i).SetUint(uint64(b[i]))
-		}
-	case reflect.Slice:
-		if field.Type.Elem().Kind() != reflect.Uint8 {
-			return InvalidTypeError{Type: field.Type}
-		}
-		b := make([]byte, value.Len())
-		if n, err := bb.Read(b); err != nil {
-			return err
-		} else if n != value.Len() {
-			return UnmarshalDataError
-		}
-		value.SetBytes(b)
-	default:
-		return InvalidTypeError{Type: field.Type}
-	}
-	return nil
-}
-
-func getUint(endian binary.ByteOrder, bitSize int, bb *bytes.Buffer) (uint64, error) {
-	if endian == nil {
-		return 0, TagErr
-	}
-	b := make([]byte, bitSize)
-	n, err := bb.Read(b)
-	if err != nil {
-		return 0, err
-	}
-	if n != bitSize {
-		return 0, UnmarshalDataError
-	}
-	if bitSize == 2 {
-		return uint64(endian.Uint16(b)), nil
-	} else if bitSize == 4 {
-		return uint64(endian.Uint32(b)), nil
-	} else if bitSize == 8 {
-		return endian.Uint64(b), nil
-	} else {
-		panic("invalid bitSize")
-	}
+func valueByteArrayToByteSlice(value reflect.Value) []byte {
+	return *(*[]byte)(unsafe.Pointer(&slice{
+		Data: value.Index(0).Addr().UnsafePointer(),
+		Len:  value.Len(),
+		Cap:  value.Len(),
+	}))
 }
