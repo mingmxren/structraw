@@ -312,7 +312,7 @@ type slice struct {
 
 func valueByteArrayToByteSlice(value reflect.Value) []byte {
 	return *(*[]byte)(unsafe.Pointer(&slice{
-		Data: value.Index(0).Addr().UnsafePointer(),
+		Data: unsafe.Pointer(value.Index(0).Addr().Pointer()),
 		Len:  value.Len(),
 		Cap:  value.Len(),
 	}))
