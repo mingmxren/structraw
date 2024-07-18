@@ -1,3 +1,3 @@
-module github.com/mingmxren/struct_raw
+module github.com/mingmxren/structraw
 
 go 1.15
