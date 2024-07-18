@@ -11,10 +11,10 @@ import (
 )
 
 var (
-	TagFormatErr    = errors.New("TagFormatErr")
-	ReadDataErr     = errors.New("ReadDataErr")
-	InvalidTypeErr  = errors.New("InvalidTypeErr")
-	WriteDataLenErr = errors.New("WriteDataLenErr")
+	ErrTagFormat    = errors.New("tag format error")
+	ErrReadData     = errors.New("read data error")
+	ErrInvalidType  = errors.New("invalid type error")
+	ErrWriteDataLen = errors.New("write data len error")
 )
 
 // Marshal with struct_raw tag
@@ -32,7 +32,7 @@ func MarshalToWriter(s interface{}, w io.Writer) (int, error) {
 		value = reflect.Indirect(reflect.ValueOf(s))
 	}
 	if value.Kind() != reflect.Struct {
-		return 0, InvalidTypeErr
+		return 0, ErrInvalidType
 	}
 	return marshal(value, w)
 }
@@ -63,12 +63,12 @@ func (t *structRawTag) parseStructRawTag(tag string) error {
 	for _, l := range ls {
 		if l == "be" {
 			if t.Endian != nil {
-				return TagFormatErr
+				return ErrTagFormat
 			}
 			t.Endian = binary.BigEndian
 		} else if l == "le" {
 			if t.Endian != nil {
-				return TagFormatErr
+				return ErrTagFormat
 			}
 			t.Endian = binary.LittleEndian
 		}
@@ -79,7 +79,7 @@ func (t *structRawTag) parseStructRawTag(tag string) error {
 
 func putUint(ui uint64, endian binary.ByteOrder, bitSize int, w io.Writer) error {
 	if bitSize > 1 && endian == nil {
-		return TagFormatErr
+		return ErrTagFormat
 	}
 	b := [8]byte{}
 	switch bitSize {
@@ -99,13 +99,13 @@ func putUint(ui uint64, endian binary.ByteOrder, bitSize int, w io.Writer) error
 		return err
 	}
 	if n != bitSize {
-		return WriteDataLenErr
+		return ErrWriteDataLen
 	}
 	return nil
 }
 
 func marshalField(field reflect.StructField, value reflect.Value, w io.Writer) (int, error) {
-	stag := field.Tag.Get("struct_raw")
+	stag := field.Tag.Get("structraw")
 	var tag structRawTag
 	err := tag.parseStructRawTag(stag)
 	if err != nil {
@@ -134,7 +134,7 @@ func marshalField(field reflect.StructField, value reflect.Value, w io.Writer) (
 		return 8, nil
 	case reflect.Array, reflect.Slice:
 		if field.Type.Elem().Kind() != reflect.Uint8 {
-			return 0, InvalidTypeErr
+			return 0, ErrInvalidType
 		}
 		var n int
 		var err error
@@ -147,11 +147,11 @@ func marshalField(field reflect.StructField, value reflect.Value, w io.Writer) (
 			return 0, err
 		}
 		if n != value.Len() {
-			return 0, WriteDataLenErr
+			return 0, ErrWriteDataLen
 		}
 		return n, nil
 	default:
-		return 0, InvalidTypeErr
+		return 0, ErrInvalidType
 	}
 }
 
@@ -163,11 +163,11 @@ func Unmarshal(data []byte, s interface{}) error {
 
 func UnmarshalFromReader(r io.Reader, s interface{}) (int, error) {
 	if reflect.ValueOf(s).Kind() != reflect.Ptr {
-		return 0, InvalidTypeErr
+		return 0, ErrInvalidType
 	}
 	value := reflect.Indirect(reflect.ValueOf(s))
 	if value.Kind() != reflect.Struct {
-		return 0, InvalidTypeErr
+		return 0, ErrInvalidType
 	}
 	return unmarshal(r, value)
 }
@@ -227,13 +227,13 @@ func unmarshalField(field reflect.StructField, value reflect.Value, r io.Reader)
 		return 8, nil
 	case reflect.Array, reflect.Slice:
 		if field.Type.Elem().Kind() != reflect.Uint8 {
-			return 0, InvalidTypeErr
+			return 0, ErrInvalidType
 		}
 		b := make([]byte, value.Len())
 		if n, err := r.Read(b); err != nil {
 			return 0, err
 		} else if n != value.Len() {
-			return 0, ReadDataErr
+			return 0, ErrReadData
 		}
 		if field.Type.Kind() == reflect.Array {
 			copy(valueByteArrayToByteSlice(value), b)
@@ -242,13 +242,13 @@ func unmarshalField(field reflect.StructField, value reflect.Value, r io.Reader)
 		}
 		return value.Len(), nil
 	default:
-		return 0, InvalidTypeErr
+		return 0, ErrInvalidType
 	}
 }
 
 func getUint(endian binary.ByteOrder, bitSize int, r io.Reader) (uint64, error) {
 	if bitSize > 1 && endian == nil {
-		return 0, TagFormatErr
+		return 0, ErrTagFormat
 	}
 	b := [8]byte{}
 	n, err := r.Read(b[:bitSize])
@@ -256,7 +256,7 @@ func getUint(endian binary.ByteOrder, bitSize int, r io.Reader) (uint64, error) 
 		return 0, err
 	}
 	if n != bitSize {
-		return 0, ReadDataErr
+		return 0, ErrReadData
 	}
 	switch bitSize {
 	case 1:
@@ -279,7 +279,7 @@ func StructLen(s interface{}) (int, error) {
 		value = reflect.Indirect(reflect.ValueOf(s))
 	}
 	if value.Kind() != reflect.Struct {
-		return 0, InvalidTypeErr
+		return 0, ErrInvalidType
 	}
 	return structLen(value)
 }
@@ -314,7 +314,7 @@ func fieldLen(field reflect.StructField, value reflect.Value) (int, error) {
 	case reflect.Array, reflect.Slice:
 		return value.Len(), nil
 	default:
-		return 0, InvalidTypeErr
+		return 0, ErrInvalidType
 	}
 }
 
