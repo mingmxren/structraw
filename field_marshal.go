@@ -146,7 +146,7 @@ func newUnmarshalFunc(field reflect.StructField, uo *uintOptions, tag *fieldTag)
 		}
 		return func(v reflect.Value, r io.Reader) (int, error) {
 			b := make([]byte, v.Len())
-			if n, err := r.Read(b); err != nil {
+			if n, err := io.ReadFull(r, b); err != nil {
 				return 0, err
 			} else if n != v.Len() {
 				return 0, ErrReadData
@@ -213,7 +213,7 @@ func getUint(endian binary.ByteOrder, bitSize int, r io.Reader) (uint64, int, er
 		panic("endianness bitSize is too large")
 	}
 	b := [8]byte{}
-	n, err := r.Read(b[:bitSize])
+	n, err := io.ReadFull(r, b[:bitSize])
 	if err != nil {
 		return 0, 0, fmt.Errorf("read data error:%w", err)
 	}
