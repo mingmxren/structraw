@@ -9,22 +9,6 @@ import (
 	"unsafe"
 )
 
-func marshalField(field reflect.StructField, value reflect.Value, w io.Writer) (int, error) {
-	marshaller, err := newFieldMarshaler(field)
-	if err != nil {
-		return 0, err
-	}
-	return marshaller.marshalFunc(value, w)
-}
-
-func unmarshalField(field reflect.StructField, value reflect.Value, r io.Reader) (int, error) {
-	unmarshaler, err := newFieldUnmarshaler(field)
-	if err != nil {
-		return 0, err
-	}
-	return unmarshaler.unmarshalFunc(value, r)
-}
-
 const (
 	FieldTagName = "structraw"
 )

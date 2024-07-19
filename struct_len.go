@@ -5,7 +5,7 @@ import (
 	"reflect"
 )
 
-func StructLen(s interface{}) (int, error) {
+func StructLen(s any) (int, error) {
 	value := reflect.ValueOf(s)
 	if reflect.ValueOf(s).Kind() == reflect.Ptr {
 		value = reflect.Indirect(reflect.ValueOf(s))

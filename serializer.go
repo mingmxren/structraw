@@ -8,7 +8,7 @@ import (
 )
 
 // Marshal with struct_raw tag
-func Marshal(s interface{}) ([]byte, error) {
+func Marshal(s any) ([]byte, error) {
 	bb := &bytes.Buffer{}
 	if _, err := MarshalToWriter(s, bb); err != nil {
 		return nil, err
@@ -16,7 +16,7 @@ func Marshal(s interface{}) ([]byte, error) {
 	return bb.Bytes(), nil
 }
 
-func MarshalToWriter(s interface{}, w io.Writer) (int, error) {
+func MarshalToWriter(s any, w io.Writer) (int, error) {
 	value := reflect.ValueOf(s)
 	if reflect.ValueOf(s).Kind() == reflect.Ptr {
 		value = reflect.Indirect(reflect.ValueOf(s))
@@ -61,7 +61,7 @@ func newMarshaler(typ reflect.Type) (*marshaler, error) {
 	return mc, nil
 }
 
-var marshalCache = NewSafeMap[reflect.Type, *marshaler]()
+var marshalCache sync.Map
 
 func getMarshaler(typ reflect.Type) (*marshaler, error) {
 	c, ok := marshalCache.Load(typ)
@@ -72,7 +72,7 @@ func getMarshaler(typ reflect.Type) (*marshaler, error) {
 		}
 		c, _ = marshalCache.LoadOrStore(typ, m)
 	}
-	return c, nil
+	return c.(*marshaler), nil
 }
 
 func marshal(value reflect.Value, w io.Writer) (int, error) {
@@ -83,13 +83,13 @@ func marshal(value reflect.Value, w io.Writer) (int, error) {
 	return m.marshal(value, w)
 }
 
-func Unmarshal(data []byte, s interface{}) error {
+func Unmarshal(data []byte, s any) error {
 	bb := bytes.NewBuffer(data)
 	_, err := UnmarshalFromReader(bb, s)
 	return err
 }
 
-func UnmarshalFromReader(r io.Reader, s interface{}) (int, error) {
+func UnmarshalFromReader(r io.Reader, s any) (int, error) {
 	if reflect.ValueOf(s).Kind() != reflect.Ptr {
 		return 0, ErrInvalidType
 	}
@@ -134,7 +134,7 @@ func (uc *unmarshaler) unmarshal(value reflect.Value, r io.Reader) (int, error) 
 	return n, nil
 }
 
-var unmarshalCache = NewSafeMap[reflect.Type, *unmarshaler]()
+var unmarshalCache sync.Map
 
 func getUnmarshaler(typ reflect.Type) (*unmarshaler, error) {
 	c, ok := unmarshalCache.Load(typ)
@@ -145,7 +145,7 @@ func getUnmarshaler(typ reflect.Type) (*unmarshaler, error) {
 		}
 		c, _ = unmarshalCache.LoadOrStore(typ, u)
 	}
-	return c, nil
+	return c.(*unmarshaler), nil
 }
 
 func unmarshal(r io.Reader, value reflect.Value) (int, error) {
@@ -154,38 +154,4 @@ func unmarshal(r io.Reader, value reflect.Value) (int, error) {
 		return 0, err
 	}
 	return u.unmarshal(value, r)
-}
-
-type SafeMap[K comparable, V any] struct {
-	mu sync.RWMutex
-	m  map[K]V
-}
-
-func NewSafeMap[K comparable, V any]() *SafeMap[K, V] {
-	return &SafeMap[K, V]{
-		m: make(map[K]V),
-	}
-}
-
-func (sm *SafeMap[K, V]) Load(key K) (V, bool) {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	val, ok := sm.m[key]
-	return val, ok
-}
-
-func (sm *SafeMap[K, V]) Store(key K, val V) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	sm.m[key] = val
-}
-
-func (sm *SafeMap[K, V]) LoadOrStore(key K, val V) (actual V, loaded bool) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	if existing, ok := sm.m[key]; ok {
-		return existing, true
-	}
-	sm.m[key] = val
-	return val, false
 }
