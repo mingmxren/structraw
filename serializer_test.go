@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+type AType uint16
+
 /*
 le: LittleEndian
 be: BigEndian
@@ -15,6 +17,7 @@ type testStruct struct {
 	AUInt16    uint16 `structraw:"le"`
 	AUInt32    uint32 `structraw:"le"`
 	AUInt64    uint64 `structraw:"le"`
+	AType      AType  `structraw:"le"`
 	AByteSlice []byte
 }
 
@@ -26,6 +29,7 @@ func TestMarshal(t *testing.T) {
 		AUInt16:    0xff00,
 		AUInt32:    0xffff0000,
 		AUInt64:    0xffffffff00000000,
+		AType:      1234,
 		AByteSlice: make([]byte, 10),
 	}
 	l, err := StructLen(ts1)
@@ -62,8 +66,27 @@ func BenchmarkMarshal(b *testing.B) {
 		AByteSlice: make([]byte, 10),
 	}
 	for i := 0; i < b.N; i++ {
-		_, err := Marshal(ts1)
-		if err != nil {
+		if _, err := Marshal(ts1); err != nil {
+			log.Fatalln(err)
+		}
+	}
+}
+
+func BenchmarkUnmarshal(b *testing.B) {
+	ts1 := &testStruct{
+		AByteArray: [4]byte{1, 2, 3, 4},
+		AUInt8:     0xff,
+		AUInt16:    0xff00,
+		AUInt32:    0xffff0000,
+		AUInt64:    0xffffffff00000000,
+		AByteSlice: make([]byte, 10),
+	}
+	data, err := Marshal(ts1)
+	if err != nil {
+		log.Fatalln(err)
+	}
+	for i := 0; i < b.N; i++ {
+		if err := Unmarshal(data, ts1); err != nil {
 			log.Fatalln(err)
 		}
 	}
